@@ -191,7 +191,15 @@ const store = {
 };
 
 const sections = ["home","gallery","game","result"];
-function show(id){ sections.forEach(s=>$(s).classList.toggle("hidden", s!==id)); $("homeBtn").classList.toggle("hidden", id==="home"); window.scrollTo(0,0); }
+function show(id){
+  sections.forEach(s=>$(s).classList.toggle("hidden", s!==id));
+  $("homeBtn").classList.toggle("hidden", id==="home");
+  window.scrollTo(0,0);
+  // Al salir del inicio, agrega una entrada al historial para que "atrás" vuelva al inicio
+  if(id!=="home" && !(history.state && history.state.app)) history.pushState({app:1}, "");
+}
+function goHome(){ renderBest(); sections.forEach(s=>$(s).classList.toggle("hidden", s!=="home")); $("homeBtn").classList.add("hidden"); window.scrollTo(0,0); }
+window.addEventListener("popstate", goHome);
 
 function renderBest(){
   const b = store.get("magneto_best") || {};
@@ -306,7 +314,7 @@ $("missBtn").onclick=()=>start(S.mode, [...new Set(S.missed)]);
 document.querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{
   const g=b.dataset.go; if(g==="gallery"){ renderGallery(); show("gallery"); } else start(g);
 });
-$("homeBtn").onclick=()=>{ renderBest(); show("home"); };
+$("homeBtn").onclick=()=>{ if(history.state && history.state.app) history.back(); else goHome(); };
 renderBest();
 </script>
 </body>
