@@ -72,6 +72,23 @@
   .mrow .ph{width:64px;height:52px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
   .mrow img{max-width:100%;max-height:100%}
   .mrow span{font-size:14px;font-weight:600}
+  .tile{cursor:zoom-in}
+  /* Visor de imagen a pantalla completa (estilo WhatsApp) */
+  .viewer{position:fixed;inset:0;z-index:50;background:#000;touch-action:none;user-select:none;-webkit-user-select:none;overflow:hidden}
+  .viewer .vbg{position:absolute;inset:0;background:#000}
+  .viewer .vstage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+  .viewer .vstage img{max-width:100%;max-height:100%;will-change:transform;-webkit-user-drag:none;pointer-events:none}
+  .viewer .vtop,.viewer .vbot{position:absolute;left:0;right:0;z-index:2;padding:12px 14px;transition:opacity .2s}
+  .viewer .vtop{top:0;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(rgba(0,0,0,.75),transparent)}
+  .viewer .vbot{bottom:0;text-align:center;background:linear-gradient(transparent,rgba(0,0,0,.8));padding-bottom:22px}
+  .viewer .vname{font-size:18px;font-weight:700;line-height:1.3}
+  .viewer .vhint{font-size:12px;color:#aaa;margin-top:6px}
+  .viewer .vcount{color:#ccc;font-size:14px}
+  .viewer .vclose{background:rgba(255,255,255,.12);border:none;color:#fff;font-size:22px;width:40px;height:40px;border-radius:50%;cursor:pointer}
+  .viewer .vnav{position:absolute;top:50%;transform:translateY(-50%);z-index:2;background:rgba(255,255,255,.12);border:none;color:#fff;font-size:26px;width:44px;height:44px;border-radius:50%;cursor:pointer;display:none}
+  .viewer .vprev{left:10px} .viewer .vnext{right:10px}
+  @media (hover:hover) and (pointer:fine){ .viewer .vnav{display:block} }
+  .viewer.ui-off .vtop,.viewer.ui-off .vbot,.viewer.ui-off .vnav{opacity:0;pointer-events:none}
   @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
   .shake{animation:shake .25s 2}
 </style>
@@ -156,6 +173,16 @@
       <div class="missed" id="missed"></div>
     </div>
   </section>
+</div>
+
+<!-- VISOR -->
+<div class="viewer hidden" id="viewer">
+  <div class="vbg" id="vbg"></div>
+  <div class="vstage" id="vstage"><img id="vimg" alt=""></div>
+  <div class="vtop"><span class="vcount" id="vcount"></span><button class="vclose" id="vclose" aria-label="Cerrar">✕</button></div>
+  <button class="vnav vprev" id="vprev" aria-label="Anterior">‹</button>
+  <button class="vnav vnext" id="vnext" aria-label="Siguiente">›</button>
+  <div class="vbot"><div class="vname" id="vname"></div><div class="vhint">Pellizca o toca 2 veces para zoom · desliza ↔ para cambiar · desliza ↕ para cerrar</div></div>
 </div>
 
 <script>
@@ -272,7 +299,11 @@ function back(){
   const r = parse();
   history.replaceState({ d: 0 }, "", r.modo ? "#/" + r.tema : "#/"); render();
 }
-window.addEventListener("popstate", render);
+window.addEventListener("popstate", () => {
+  if (V.skipPop) { V.skipPop = false; return; }      // lo cerramos nosotros (deslizar / ✕)
+  if (V.open) { closeViewer(true); return; }         // botón atrás con el visor abierto
+  render();
+});
 $("backBtn").onclick = back;
 
 function render(){
@@ -310,14 +341,150 @@ document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => go("#/" 
 
 function renderGallery(T){
   let html = "", last = null, num = 0;
-  for (const p of T.piezas) {
+  T.piezas.forEach((p, i) => {
     if (T.key === "todo" && p.tema !== last) { html += `<div class="subtitle">${TEMAS[p.tema].nombre}</div>`; last = p.tema; num = 0; }
     if (p.sub && T.key !== "todo") html += `<div class="subtitle">${p.sub}</div>`;
     num++;
-    html += `<div class="tile"><div class="ph"><img src="${p.img}" alt="" loading="lazy"></div><p><small>${num}</small>${p.n}</p></div>`;
-  }
+    html += `<div class="tile" data-i="${i}"><div class="ph"><img src="${p.img}" alt="" loading="lazy"></div><p><small>${num}</small>${p.n}</p></div>`;
+  });
   $("grid").innerHTML = html;
+  // Abrir con un toque (pointer events: más fiable que "click" en el celular)
+  $("grid").querySelectorAll(".tile").forEach(t => {
+    let down = null;
+    t.onpointerdown = e => { down = { x: e.clientX, y: e.clientY, t: Date.now() }; };
+    t.onpointercancel = () => { down = null; };                // se empezó a desplazar la página
+    t.onpointerup = e => {
+      if (!down) return;
+      const tap = Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && Date.now() - down.t < 600;
+      down = null;
+      if (tap && !V.open) openViewer(T.piezas, +t.dataset.i);
+    };
+  });
 }
+
+/* ================= VISOR (zoom tipo WhatsApp) ================= */
+const V = { open:false, skipPop:false, list:[], i:0, s:1, x:0, y:0 };
+const vimg = $("vimg"), viewer = $("viewer");
+function vApply(anim){
+  vimg.style.transition = anim ? "transform .22s ease" : "none";
+  vimg.style.transform = `translate(${V.x}px,${V.y}px) scale(${V.s})`;
+}
+function vShow(){
+  const p = V.list[V.i];
+  vimg.src = p.img; $("vname").textContent = p.n; $("vcount").textContent = `${V.i + 1} / ${V.list.length}`;
+  V.s = 1; V.x = 0; V.y = 0; vApply(false); $("vbg").style.opacity = 1;
+  [V.i - 1, V.i + 1].forEach(j => { if (V.list[j]) { const im = new Image(); im.src = V.list[j].img; } });
+}
+function openViewer(list, i){
+  V.list = list; V.i = i; V.open = true;
+  history.pushState({ d: ((history.state && history.state.d) || 0) + 1, viewer: 1 }, "", location.hash);
+  viewer.classList.remove("hidden", "ui-off"); document.body.style.overflow = "hidden"; vShow();
+}
+// fromPop = true cuando lo cierra el botón atrás del celular
+function closeViewer(fromPop){
+  if (!V.open) return;
+  V.open = false; viewer.classList.add("hidden"); document.body.style.overflow = "";
+  if (!fromPop) { V.skipPop = true; history.back(); }
+}
+function vGo(dir){
+  const j = V.i + dir;
+  if (j < 0 || j >= V.list.length) { V.x = 0; vApply(true); return; }
+  V.i = j; vShow();
+}
+// Límite para que la imagen ampliada no se salga de la pantalla
+function vClamp(){
+  const st = $("vstage").getBoundingClientRect();
+  const w = vimg.offsetWidth * V.s, h = vimg.offsetHeight * V.s;
+  const mx = Math.max(0, (w - st.width) / 2), my = Math.max(0, (h - st.height) / 2);
+  V.x = Math.min(mx, Math.max(-mx, V.x)); V.y = Math.min(my, Math.max(-my, V.y));
+}
+// Zoom manteniendo fijo el punto (fx, fy), medido desde el centro de la pantalla
+function vZoomAt(ns, fx, fy){
+  ns = Math.min(5, Math.max(1, ns));
+  V.x = fx - (ns / V.s) * (fx - V.x); V.y = fy - (ns / V.s) * (fy - V.y); V.s = ns;
+  if (V.s === 1) { V.x = 0; V.y = 0; }
+}
+const center = () => { const r = $("vstage").getBoundingClientRect(); return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; };
+
+const ptrs = new Map(); let G = null, lastTap = { t:0, x:0, y:0 };
+function gStart(){
+  const pts = [...ptrs.values()], { cx, cy } = center();
+  if (pts.length >= 2) {
+    const [a, b] = pts;
+    G = { type:"pinch", d0: Math.hypot(a.x - b.x, a.y - b.y), s0: V.s, x0: V.x, y0: V.y,
+          mx: (a.x + b.x) / 2 - cx, my: (a.y + b.y) / 2 - cy };
+  } else if (pts.length === 1) {
+    G = { type: V.s > 1 ? "pan" : "swipe", sx: pts[0].x, sy: pts[0].y, x0: V.x, y0: V.y, t0: Date.now(), axis: null, moved: false };
+  } else G = null;
+}
+viewer.addEventListener("pointerdown", e => {
+  if (e.target.closest("button")) return;
+  viewer.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); gStart();
+});
+viewer.addEventListener("pointermove", e => {
+  if (!ptrs.has(e.pointerId) || !G) return;
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  const pts = [...ptrs.values()], { cx, cy } = center();
+  if (G.type === "pinch" && pts.length >= 2) {
+    const [a, b] = pts, d = Math.hypot(a.x - b.x, a.y - b.y);
+    const s = Math.min(5, Math.max(1, G.s0 * d / G.d0));
+    const mx = (a.x + b.x) / 2 - cx, my = (a.y + b.y) / 2 - cy;
+    V.x = mx - (s / G.s0) * (G.mx - G.x0); V.y = my - (s / G.s0) * (G.my - G.y0); V.s = s;
+    vApply(false); return;
+  }
+  const dx = pts[0].x - G.sx, dy = pts[0].y - G.sy;
+  if (Math.abs(dx) > 8 || Math.abs(dy) > 8) G.moved = true;
+  if (G.type === "pan") { V.x = G.x0 + dx; V.y = G.y0 + dy; vApply(false); return; }
+  if (!G.axis && G.moved) G.axis = Math.abs(dy) > Math.abs(dx) ? "y" : "x";
+  if (G.axis === "y") { V.y = dy; V.x = 0; $("vbg").style.opacity = Math.max(.15, 1 - Math.abs(dy) / 350); viewer.classList.add("ui-off"); vApply(false); }
+  if (G.axis === "x") { V.x = dx; V.y = 0; vApply(false); }
+});
+function pEnd(e){
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.delete(e.pointerId);
+  const g = G;
+  if (ptrs.size > 0) { gStart(); return; }          // queda un dedo: sigue moviendo sin saltos
+  G = null; if (!g) return;
+  if (g.type === "pinch") { if (V.s < 1.05) { V.s = 1; V.x = 0; V.y = 0; } vClamp(); vApply(true); return; }
+  const dx = e.clientX - g.sx, dy = e.clientY - g.sy;
+  if (!g.moved && Date.now() - g.t0 < 300) {          // toque
+    const now = Date.now();
+    if (now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
+      const { cx, cy } = center();
+      if (V.s > 1) { V.s = 1; V.x = 0; V.y = 0; } else vZoomAt(2.5, e.clientX - cx, e.clientY - cy);
+      vClamp(); vApply(true); lastTap.t = 0;
+    } else {
+      lastTap = { t: now, x: e.clientX, y: e.clientY };
+      setTimeout(() => { if (lastTap.t === now && V.open && V.s === 1) viewer.classList.toggle("ui-off"); }, 330);
+    }
+    return;
+  }
+  if (g.type === "pan") { vClamp(); vApply(true); return; }
+  if (g.axis === "y") {
+    if (Math.abs(dy) > 90) { closeViewer(false); return; }
+    V.y = 0; $("vbg").style.opacity = 1; viewer.classList.remove("ui-off"); vApply(true); return;
+  }
+  if (g.axis === "x") {
+    if (Math.abs(dx) > 60) vGo(dx < 0 ? 1 : -1); else { V.x = 0; vApply(true); }
+  }
+}
+viewer.addEventListener("pointerup", pEnd);
+viewer.addEventListener("pointercancel", pEnd);
+// En la PC: rueda del mouse para zoom, flechas y Esc
+viewer.addEventListener("wheel", e => {
+  e.preventDefault(); const { cx, cy } = center();
+  vZoomAt(V.s * (e.deltaY < 0 ? 1.2 : 1 / 1.2), e.clientX - cx, e.clientY - cy); vClamp(); vApply(false);
+}, { passive: false });
+document.addEventListener("keydown", e => {
+  if (!V.open) return;
+  if (e.key === "Escape") closeViewer(false);
+  if (e.key === "ArrowRight") vGo(1);
+  if (e.key === "ArrowLeft") vGo(-1);
+});
+$("vclose").onclick = () => closeViewer(false);
+$("vprev").onclick = () => vGo(-1);
+$("vnext").onclick = () => vGo(1);
 
 /* ================= JUEGO ================= */
 let S = null;
